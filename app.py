@@ -209,8 +209,30 @@ st.markdown(
             color: var(--pelek-orange) !important;
         }
 
+        /* ให้แถบป้อนข้อความกว้างเท่าพื้นที่แชท และลบพื้นขาวด้านซ้าย-ขวา */
+        [data-testid="stBottom"] {
+            background: linear-gradient(
+                180deg,
+                rgba(255, 248, 239, 0) 0%,
+                rgba(255, 248, 239, 0.96) 30%,
+                #fff8ef 100%
+            ) !important;
+        }
+
+        [data-testid="stBottom"] > div {
+            background: transparent !important;
+        }
+
         [data-testid="stBottomBlockContainer"] {
-            background: linear-gradient(180deg, rgba(255, 248, 239, 0), #fff8ef 35%);
+            width: calc(100% - 2rem) !important;
+            max-width: 920px !important;
+            padding-left: 0 !important;
+            padding-right: 0 !important;
+            background: transparent !important;
+        }
+
+        [data-testid="stBottomBlockContainer"] [data-testid="stChatInput"] {
+            width: 100% !important;
         }
 
         [data-testid="stExpander"] {
@@ -246,6 +268,10 @@ st.markdown(
         @media (max-width: 640px) {
             .block-container {
                 padding-top: 1rem;
+            }
+
+            [data-testid="stBottomBlockContainer"] {
+                width: calc(100% - 1rem) !important;
             }
 
             .pelek-hero {
@@ -362,6 +388,9 @@ SYNONYM_GROUPS = {
         "ผู้สอน",
         "คณาจารย์",
         "ครูช่าง",
+        "อาจารย์ผู้สอน",
+        "อาจารย์ประจำวิชา"
+        "คณะอาจารย์"
     ],
     "ค่าเทอม": [
         "ค่าเทอม",
@@ -506,6 +535,24 @@ SYNONYM_GROUPS = {
         "ปีสี่",
         "ชั้นปีที่ 4",
         "นักศึกษาปี 4",
+    ],
+    "สาขาวิศวกรรมไฟฟ้า": [
+        "สาขาวิศวกรรมไฟฟ้า",
+        "ภาควิชาวิศวกรรมไฟฟ้า",
+        "สาขา",
+        "ภาควิชา",
+        "สาขาไฟฟ้า",
+        "ภาควิชาไฟฟ้า",
+        "ภาคนี้",
+        "สาขานี้",
+        "คณะนี้",
+    ],
+    "คณาอาจารย์": [
+        "คณาอาจารย์",
+        "คณะอาจารย์",
+        "อาจารย์",
+        "อาจารย์ประจำวิชา",
+        "อาจารย์ผู้สอน",
     ],
 }
 
@@ -690,8 +737,7 @@ if prompt := st.chat_input("พิมพ์คำถามเกี่ยวก�
                 )
                 return
 
-            with st.expander("ดูข้อมูลที่ RAG ค้นเจอ"):
-                st.caption(f"วิธีค้นหา: {retrieval_method}")
+          
                 for rank, (index, score) in enumerate(matches, start=1):
                     st.markdown(f"**อันดับ {rank} · คะแนน {score:.3f}**")
                     st.markdown(chunks[index])
