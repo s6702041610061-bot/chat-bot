@@ -1,22 +1,24 @@
 import base64
+import logging
 import os
 from pathlib import Path
 
-import google.generativeai as genai
 import streamlit as st
 from dotenv import load_dotenv
-from prompt import PROMPT_WORKAW
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
-import re
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+import time
+from gemini_service import create_chat, create_client, embedding_function
+from rag import (build_retriever, retrieve, build_history, build_rag_prompt,
+                 generate_answer, NOT_FOUND, expand_query, SYNONYM_GROUPS,
+                 CONTEXT_STATE_KEY, clean_question)
 
+LOGGER = logging.getLogger(__name__)
 
 st.set_page_config(
     page_title="PELEK Chatbot | ครุศาสตร์ไฟฟ้า",
     page_icon="⚡",
     layout="centered",
-    initial_sidebar_state="collapsed",
+    # Streamlit opens it on wide screens and collapses it on narrow screens.
+    initial_sidebar_state="auto",
 )
 
 APP_DIR = Path(__file__).resolve().parent
@@ -296,74 +298,388 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# Minimal conversational layout inspired by modern AI chat products. This only
+# restyles features the app already supports; it does not add imitation controls.
+st.markdown(
+    """
+    <style>
+        :root {
+            --chat-accent: #a66a18;
+            --chat-accent-dark: #70461f;
+            --chat-accent-soft: #f4e6c7;
+            --chat-text: #332820;
+            --chat-muted: #786b5f;
+            --chat-line: #e5d9c9;
+            --chat-sidebar: #f5f0e8;
+            --chat-user: #efe4d2;
+            --chat-surface: #fffdf8;
+            --chat-surface-soft: #faf5ec;
+        }
+
+        .stApp {
+            background:
+                radial-gradient(circle at 76% 0%, rgba(209, 158, 61, 0.1), transparent 28rem),
+                var(--chat-surface);
+            color: var(--chat-text);
+            font-family: "Noto Sans Thai", "Leelawadee UI", Arial, sans-serif;
+        }
+
+        header[data-testid="stHeader"] {
+            background: rgba(255, 253, 248, 0.9);
+            backdrop-filter: blur(12px);
+        }
+
+        .block-container {
+            max-width: 860px;
+            padding-top: 0.9rem;
+            padding-bottom: 8.5rem;
+        }
+
+        .pelek-appbar {
+            position: sticky;
+            top: 0.35rem;
+            z-index: 5;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            margin-bottom: 1.4rem;
+            padding: 0.55rem 0.2rem 0.8rem;
+            border-bottom: 1px solid var(--chat-line);
+            background: rgba(255, 253, 248, 0.94);
+            backdrop-filter: blur(14px);
+        }
+
+        .pelek-appbar-brand {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            min-width: 0;
+        }
+
+        .pelek-appbar-avatar {
+            width: 38px;
+            height: 38px;
+            border: 1px solid var(--chat-line);
+            border-radius: 50%;
+            background: var(--chat-surface);
+            object-fit: cover;
+        }
+
+        .pelek-appbar-copy {
+            min-width: 0;
+        }
+
+        .pelek-appbar-title {
+            color: var(--chat-text);
+            font-size: 1rem;
+            font-weight: 700;
+            line-height: 1.25;
+        }
+
+        .pelek-appbar-subtitle {
+            overflow: hidden;
+            color: var(--chat-muted);
+            font-size: 0.76rem;
+            line-height: 1.35;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .pelek-appbar-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            flex: 0 0 auto;
+            color: var(--chat-muted);
+            font-size: 0.76rem;
+        }
+
+        .pelek-appbar-status::before {
+            width: 0.48rem;
+            height: 0.48rem;
+            border-radius: 50%;
+            background: #b98726;
+            content: "";
+        }
+
+        [data-testid="stChatMessage"] {
+            width: 100%;
+            margin: 0 0 0.35rem;
+            padding: 0.85rem 0;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            box-shadow: none;
+        }
+
+        [data-testid="stChatMessage"] [data-testid="stChatMessageAvatar"] {
+            width: 2rem;
+            height: 2rem;
+            border: 1px solid var(--chat-line);
+            background: var(--chat-surface);
+            box-shadow: none;
+        }
+
+        [data-testid="stChatMessageContent"] {
+            max-width: 720px;
+            min-width: 0;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        [data-testid="stChatMessageContent"] p,
+        [data-testid="stChatMessageContent"] li {
+            color: var(--chat-text);
+            font-size: 0.98rem;
+            line-height: 1.75;
+        }
+
+        [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
+            box-sizing: border-box;
+            width: fit-content;
+            max-width: min(72%, 620px);
+            margin: 0.45rem 2.75rem 0.7rem auto;
+            min-height: 4.15rem;
+            padding: 0.82rem 1.3rem;
+            border: 1px solid #e3d3b9;
+            border-radius: 1.35rem;
+            background: var(--chat-user);
+            box-shadow: 0 2px 8px rgba(91, 62, 32, 0.05);
+        }
+
+        [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"])
+        [data-testid="stChatMessageAvatarUser"] {
+            display: none;
+        }
+
+        [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"])
+        [data-testid="stChatMessageContent"] {
+            padding: 0;
+        }
+
+        [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"])
+        [data-testid="stChatMessageContent"] p {
+            margin: 0;
+            color: var(--chat-text);
+            font-family: "Noto Sans Thai", "Leelawadee UI", Arial, sans-serif;
+            font-size: 1.06rem;
+            font-weight: 400 !important;
+            line-height: 1.7;
+            letter-spacing: 0;
+            text-align: left;
+        }
+
+        [data-testid="stBottom"] {
+            background: linear-gradient(
+                180deg,
+                rgba(255, 253, 248, 0) 0%,
+                rgba(255, 253, 248, 0.96) 34%,
+                var(--chat-surface) 100%
+            ) !important;
+        }
+
+        [data-testid="stBottom"] > div {
+            background: transparent !important;
+        }
+
+        [data-testid="stBottomBlockContainer"] {
+            width: calc(100% - 2rem) !important;
+            max-width: 820px !important;
+            padding: 1rem 0 1.25rem !important;
+            background: transparent !important;
+        }
+
+        [data-testid="stChatInput"] {
+            width: 100% !important;
+            min-height: 3.7rem;
+            border: 1px solid #ddcfbb;
+            border-radius: 1.8rem;
+            background: var(--chat-surface-soft);
+            box-shadow: 0 4px 18px rgba(83, 58, 33, 0.11);
+        }
+
+        [data-testid="stChatInput"]:focus-within {
+            border-color: #c39952;
+            box-shadow: 0 0 0 3px rgba(196, 151, 76, 0.12), 0 4px 18px rgba(83, 58, 33, 0.12);
+        }
+
+        [data-testid="stChatInput"] button {
+            color: var(--chat-accent) !important;
+        }
+
+        [data-testid="stSidebar"] {
+            border-right: 1px solid var(--chat-line);
+            background:
+                radial-gradient(circle at 18% 5%, rgba(213, 166, 80, 0.2), transparent 13rem),
+                linear-gradient(165deg, #f9f5ed 0%, var(--chat-sidebar) 48%, #eee3d3 100%);
+            box-shadow: 9px 0 26px rgba(73, 50, 28, 0.12);
+        }
+
+        [data-testid="stSidebar"] * {
+            color: var(--chat-text);
+        }
+
+        .pelek-sidebar-brand {
+            display: flex;
+            align-items: center;
+            gap: 0.7rem;
+            margin: 0.15rem 0 1.15rem;
+            padding: 0.72rem;
+            border: 1px solid rgba(205, 180, 140, 0.55);
+            border-radius: 1rem;
+            background: rgba(255, 253, 248, 0.72);
+            box-shadow:
+                0 7px 18px rgba(83, 58, 33, 0.08),
+                inset 0 1px 0 rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(8px);
+        }
+
+        .pelek-sidebar-brand img {
+            width: 34px;
+            height: 34px;
+            border: 1px solid var(--chat-line);
+            border-radius: 50%;
+            background: var(--chat-surface);
+            object-fit: cover;
+        }
+
+        .pelek-sidebar-brand strong {
+            display: block;
+            font-size: 1rem;
+            line-height: 1.2;
+        }
+
+        .pelek-sidebar-brand span {
+            color: var(--chat-muted) !important;
+            font-size: 0.72rem;
+        }
+
+        [data-testid="stSidebar"] .stButton > button {
+            justify-content: flex-start;
+            width: 100%;
+            min-height: 2.8rem;
+            padding: 0 0.9rem;
+            border: 1px solid #ddcfbb;
+            border-radius: 0.85rem;
+            background: var(--chat-surface);
+            color: var(--chat-text);
+            font-weight: 600;
+            box-shadow:
+                0 5px 12px rgba(83, 58, 33, 0.09),
+                inset 0 1px 0 rgba(255, 255, 255, 0.85);
+            transition: transform 150ms ease, box-shadow 150ms ease, background 150ms ease;
+        }
+
+        [data-testid="stSidebar"] .stButton > button:hover {
+            border-color: #c9aa76;
+            background: var(--chat-accent-soft);
+            color: var(--chat-accent-dark);
+            box-shadow: 0 8px 17px rgba(83, 58, 33, 0.13);
+            transform: translateY(-1px);
+        }
+
+        [data-testid="stSidebar"] [data-testid="stExpander"] {
+            border: 1px solid rgba(205, 180, 140, 0.5);
+            border-radius: 0.75rem;
+            background: rgba(255, 253, 248, 0.58);
+            box-shadow:
+                0 4px 12px rgba(83, 58, 33, 0.07),
+                inset 0 1px 0 rgba(255, 255, 255, 0.8);
+        }
+
+        [data-testid="stExpander"] {
+            overflow: hidden;
+            border: 1px solid var(--chat-line);
+            border-radius: 0.85rem;
+            background: var(--chat-surface-soft);
+        }
+
+        @media (max-width: 768px) {
+            .block-container {
+                padding: 0.65rem 1rem 8rem;
+            }
+
+            .pelek-appbar-subtitle,
+            .pelek-appbar-status {
+                display: none;
+            }
+
+            [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
+                max-width: 88%;
+                margin-right: 0;
+            }
+
+            [data-testid="stBottomBlockContainer"] {
+                width: calc(100% - 1rem) !important;
+            }
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
-load_dotenv()
+
+load_dotenv(APP_DIR / ".env")
 api_key = os.getenv("GEMINI_API_KEY_INSURVERSE")
 
 if not api_key:
-    st.error("ไม่พบ GEMINI_API_KEY_INSURVERSE ในไฟล์ .env")
-    st.stop()
+    try:
+        api_key = st.secrets.get("GEMINI_API_KEY_INSURVERSE")
+    except (FileNotFoundError, KeyError):
+        pass
 
-genai.configure(api_key=api_key)
-generation_config = {
-    "temperature": 0.1,
-    "top_p": 0.95,
-    "top_k": 64,
-    # "max_output_tokens": 8192,
-    "max_output_tokens": 1024,  # Reduce this value to lower the token usage
-    "response_mime_type": "text/plain",
-}
+@st.cache_resource(show_spinner=False)
+def cached_gemini_client(key):
+    return create_client(key)
 
-SAFETY_SETTINGS = {
-    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE
-    }
 
-model = genai.GenerativeModel(
-    model_name="gemini-3.5-flash",
-    safety_settings=SAFETY_SETTINGS,
-    generation_config=generation_config,
-    system_instruction=PROMPT_WORKAW
-    ,)
+client = cached_gemini_client(api_key) if api_key else None
+embed_content = embedding_function(client)
 
 
 def clear_history():
     st.session_state["messages"] = [
         {
             "role": "model",
-            "content": "สวัสดีค่ะ PELEK เอง 👋 สอบถามข้อมูลเกี่ยวกับคณะครุศาสตร์อุตสาหกรรมและภาควิชาเทคโนโลยีวิศวกรรมไฟฟ้าได้เลยค่ะ",
+            "content": "สวัสดีค่ะ มีอะไรเกี่ยวกับคณะครุศาสตร์อุตสาหกรรมหรือภาควิชาเทคโนโลยีวิศวกรรมไฟฟ้าให้ช่วยค้นหาได้บ้างคะ",
         }
     ]
+    st.session_state.pop(CONTEXT_STATE_KEY, None)
+    st.session_state.pop("embedding_retry_after", None)
     st.rerun()
 
 
 with st.sidebar:
-    st.markdown("### ⚡ PELEK Chatbot")
-    st.caption("ผู้ช่วยตอบคำถามภาควิชาเทคโนโลยีวิศวกรรมไฟฟ้า")
-    if st.button("🗑️ ล้างประวัติการสนทนา", use_container_width=True):
+    st.markdown(
+        f"""
+        <div class="pelek-sidebar-brand">
+            <img src="{BOT_AVATAR_DATA_URI}" alt="PELEK">
+            <div>
+                <strong>PELEK</strong>
+                <span>Electrical Education Assistant</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if st.button("＋ แชตใหม่", use_container_width=True):
         clear_history()
-    st.caption("คำแนะนำ: ระบุหัวข้อที่ต้องการสอบถามให้ชัดเจน เพื่อให้ได้คำตอบที่ตรงที่สุด")
+    st.caption("ผู้ช่วยค้นหาข้อมูลจาก FAQ ของภาควิชาเทคโนโลยีวิศวกรรมไฟฟ้า")
 
 st.markdown(
     f"""
-    <section class="pelek-hero">
-        <div class="pelek-avatar-wrap">
-            <img src="{BOT_AVATAR_DATA_URI}" alt="รูปโปรไฟล์ PELEK Chatbot">
-        </div>
-        <div class="pelek-hero-content">
-            <div class="pelek-kicker">KMUTNB · Electrical Education</div>
-            <h1>สวัสดีค่ะ <span>PELEK</span> เอง</h1>
-            <p>ผู้ช่วยตอบคำถามเกี่ยวกับหลักสูตร การเรียน และบุคลากรภาควิชาเทคโนโลยีวิศวกรรมไฟฟ้า</p>
-            <div class="pelek-status">
-                <span class="pelek-status-dot"></span>
-                พร้อมตอบคำถาม
+    <section class="pelek-appbar">
+        <div class="pelek-appbar-brand">
+            <img class="pelek-appbar-avatar" src="{BOT_AVATAR_DATA_URI}" alt="PELEK">
+            <div class="pelek-appbar-copy">
+                <div class="pelek-appbar-title">PELEK</div>
+                <div class="pelek-appbar-subtitle">ผู้ช่วยข้อมูลหลักสูตรครุศาสตร์อุตสาหกรรม · วิศวกรรมไฟฟ้า</div>
             </div>
         </div>
+        <div class="pelek-appbar-status">พร้อมตอบคำถาม</div>
     </section>
-    <div class="pelek-section-label">เริ่มต้นการสนทนา</div>
     """,
     unsafe_allow_html=True,
 )
@@ -372,410 +688,96 @@ if "messages" not in st.session_state:
     st.session_state["messages"] = [
         {
             "role": "model",
-            "content": "สวัสดีค่ะ PELEK เอง 👋 สอบถามข้อมูลเกี่ยวกับคณะครุศาสตร์อุตสาหกรรมและภาควิชาเทคโนโลยีวิศวกรรมไฟฟ้าได้เลยค่ะ",
+            "content": "สวัสดีค่ะ มีอะไรเกี่ยวกับคณะครุศาสตร์อุตสาหกรรมหรือภาควิชาเทคโนโลยีวิศวกรรมไฟฟ้าให้ช่วยค้นหาได้บ้างคะ",
         }
     ]
 
 file_path = APP_DIR / "FAQ_Chatbot_100.md"
-EMBEDDING_MODEL = "models/gemini-embedding-001"
-
-# กลุ่มคำที่ผู้ใช้อาจพิมพ์ต่างกัน แต่สื่อถึงเรื่องเดียวกันในชุดข้อมูล FAQ
-# ควรใส่เฉพาะคำที่มีความหมายใกล้กันจริง เพื่อไม่ให้ RAG ดึงข้อมูลผิดหัวข้อ
-SYNONYM_GROUPS = {
-    "ผู้สอน": [
-        "ครู",
-        "อาจารย์",
-        "ผู้สอน",
-        "คณาจารย์",
-        "ครูช่าง",
-        "อาจารย์ผู้สอน",
-        "อาจารย์ประจำวิชา"
-        "คณะอาจารย์"
-    ],
-    "ค่าเทอม": [
-        "ค่าเทอม",
-        "ค่าเล่าเรียน",
-        "ค่าธรรมเนียมการศึกษา",
-        "ค่าใช้จ่ายการศึกษา",
-    ],
-    "สมัครเรียน": [
-        "สมัครเรียน",
-        "สมัครเข้าเรียน",
-        "การรับสมัคร",
-        "รับสมัคร",
-        "ยื่นสมัคร",
-    ],
-    "เกรดเฉลี่ย": [
-        "เกรดเฉลี่ย",
-        "เกรดเฉลี่ยสะสม",
-        "ผลการเรียนเฉลี่ย",
-        "GPA",
-        "GPAX",
-    ],
-    "หน่วยกิต": [
-        "หน่วยกิต",
-        "เครดิตวิชา",
-        "จำนวนหน่วยกิต",
-    ],
-    "ภาคการศึกษา": [
-        "ภาคการศึกษา",
-        "ภาคเรียน",
-        "เทอม",
-        "semester",
-    ],
-    "แขนงวิชา": [
-        "แขนงวิชา",
-        "สาขาย่อย",
-        "วิชาเอก",
-        "แทร็ก",
-        "track",
-    ],
-    "ฝึกงาน": [
-        "ฝึกงาน",
-        "ฝึกประสบการณ์ในโรงงาน",
-        "ฝึกประสบการณ์ภาคอุตสาหกรรม",
-        "ฝึกประสบการณ์วิชาชีพในสถานประกอบการ",
-    ],
-    "ฝึกสอน": [
-        "ฝึกสอน",
-        "ออกฝึกสอน",
-        "ปฏิบัติการสอน",
-        "ฝึกประสบการณ์วิชาชีพครู",
-        "สอนจริง",
-    ],
-    "ทุนการศึกษา": [
-        "ทุน",
-        "ทุนการศึกษา",
-        "กยศ.",
-        "กยศ",
-        "เงินกู้เพื่อการศึกษา",
-    ],
-    "สำเร็จการศึกษา": [
-        "เรียนจบ",
-        "จบการศึกษา",
-        "สำเร็จการศึกษา",
-        "จบหลักสูตร",
-    ],
-    "วุฒิการศึกษา": [
-        "วุฒิการศึกษา",
-        "ใบวุฒิการศึกษา",
-        "ปริญญา",
-        "ชื่อปริญญา",
-    ],
-    "มหาวิทยาลัยเทคโนโลยีพระจอมเกล้าพระนครเหนือ": [
-        "มหาวิทยาลัยเทคโนโลยีพระจอมเกล้าพระนครเหนือ",
-        "พระจอมเกล้าพระนครเหนือ",
-        "มจพ.",
-        "มจพ",
-        "KMUTNB",
-    ],
-    "ห้องปฏิบัติการ": [
-        "ห้องปฏิบัติการ",
-        "ห้องแล็บ",
-        "ห้องแลป",
-        "ห้องทดลอง",
-        "lab",
-    ],
-    "ใบประกอบวิชาชีพครู": [
-        "ใบประกอบวิชาชีพครู",
-        "ใบประกอบครู",
-        "ใบวิชาชีพครู",
-        "ตั๋วครู",
-    ],
-    "โครงงาน": [
-        "โครงงาน",
-        "โปรเจกต์",
-        "โปรเจ็ค",
-        "โปรเจ็คท์",
-        "project",
-    ],
-    "เทียบโอน": [
-        "เทียบโอน",
-        "โอนหน่วยกิต",
-        "เทียบหน่วยกิต",
-        "transfer credit",
-    ],
-    "สอบสัมภาษณ์": [
-        "สอบสัมภาษณ์",
-        "สัมภาษณ์",
-        "interview",
-    ],
-    "สอบตก": [
-        "สอบตก",
-        "ติด F",
-        "ได้ F",
-        "ไม่ผ่านวิชา",
-    ],
-    "ติดต่อภาควิชา": [
-        "ติดต่อภาควิชา",
-        "เบอร์โทรภาควิชา",
-        "โทรศัพท์ภาควิชา",
-        "ช่องทางติดต่อภาควิชา",
-    ],
-    "ปี 1": [
-        "ปี 1",
-        "ปีหนึ่ง",
-        "ชั้นปีที่ 1",
-        "นักศึกษาปี 1",
-    ],
-    "ปี 2": [
-        "ปี 2",
-        "ปีสอง",
-        "ชั้นปีที่ 2",
-        "นักศึกษาปี 2",
-    ],
-    "ปี 3": [
-        "ปี 3",
-        "ปีสาม",
-        "ชั้นปีที่ 3",
-        "นักศึกษาปี 3",
-    ],
-    "ปี 4": [
-        "ปี 4",
-        "ปีสี่",
-        "ชั้นปีที่ 4",
-        "นักศึกษาปี 4",
-    ],
-    "สาขาวิศวกรรมไฟฟ้า": [
-        "สาขาวิศวกรรมไฟฟ้า",
-        "ภาควิชาวิศวกรรมไฟฟ้า",
-        "สาขา",
-        "ภาควิชา",
-        "สาขาไฟฟ้า",
-        "ภาควิชาไฟฟ้า",
-        "ภาคนี้",
-        "สาขานี้",
-        "คณะนี้",
-    ],
-    "คณาอาจารย์": [
-        "คณาอาจารย์",
-        "คณะอาจารย์",
-        "อาจารย์",
-        "อาจารย์ประจำวิชา",
-        "อาจารย์ผู้สอน",
-    ],
-}
-
-
-def expand_query(question):
-    """เติมคำใกล้เคียงให้คำถาม เพื่อช่วยให้ RAG ค้นหา FAQ ได้ครอบคลุมขึ้น"""
-    related_words = []
-    question_lower = question.lower()
-
-    for main_word, aliases in SYNONYM_GROUPS.items():
-        found = any(
-            alias.lower() in question_lower
-            for alias in aliases
-        )
-
-        if found:
-            related_words.append(main_word)
-            related_words.extend(aliases)
-
-    # ลบคำซ้ำโดยยังรักษาลำดับเดิมไว้
-    related_words = list(dict.fromkeys(related_words))
-
-    if related_words:
-        return question + " " + " ".join(related_words)
-
-    return question
 
 
 @st.cache_resource
-def build_retriever(file_path, file_version):
-    try:
-        with open(file_path, "r", encoding="utf-8") as file:
-            content = file.read()
-    except Exception as e:
-        st.error(f"Error reading file: {e}")
-        st.stop()
+def cached_retriever(faq_bytes, embedding_version):
+    return build_retriever(faq_bytes, APP_DIR)
 
-    # แยก Markdown ออกเป็น FAQ ละ 1 ชุด
-    chunks = re.split(r"(?=## FAQ \d+)", content)
-    chunks = [
-        chunk.strip()
-        for chunk in chunks
-        if chunk.strip().startswith("## FAQ")
-    ]
 
-    if not chunks:
-        st.error("ไม่พบข้อมูล FAQ ในไฟล์ Markdown")
-        st.stop()
-
-    # สร้าง TF-IDF สำรองไว้เสมอ เผื่อบริการ Embedding ใช้งานไม่ได้
-    vectorizer = TfidfVectorizer(
-        analyzer="char",
-        ngram_range=(2, 6),
-        sublinear_tf=True,
+try:
+    embedding_version = tuple(
+        (path.stat().st_mtime_ns, path.stat().st_size) if path.exists() else None
+        for path in (APP_DIR / "faq_embeddings.npz", APP_DIR / "faq_embeddings.meta.json")
     )
-    tfidf_vectors = vectorizer.fit_transform(chunks)
+    retriever = cached_retriever(file_path.read_bytes(), embedding_version)
+except (OSError, ValueError, UnicodeError):
+    st.error("ไม่สามารถอ่านชุดข้อมูล FAQ ได้ กรุณาตรวจสอบไฟล์ FAQ_Chatbot_100.md")
+    st.stop()
 
-    semantic_vectors = []
-    embedding_error = None
-
-    try:
-        # แบ่งเป็นชุดย่อย เพื่อลดโอกาสที่คำขอ Embedding จะใหญ่เกินไป
-        batch_size = 20
-        for start in range(0, len(chunks), batch_size):
-            batch = chunks[start:start + batch_size]
-            result = genai.embed_content(
-                model=EMBEDDING_MODEL,
-                content=batch,
-                task_type="retrieval_document",
-            )
-            batch_vectors = result["embedding"]
-
-            # รองรับกรณี SDK คืนเวกเตอร์เดี่ยวแทนรายการเวกเตอร์
-            if batch_vectors and isinstance(batch_vectors[0], (int, float)):
-                batch_vectors = [batch_vectors]
-
-            semantic_vectors.extend(batch_vectors)
-
-        if len(semantic_vectors) != len(chunks):
-            raise ValueError("จำนวนเวกเตอร์ไม่ตรงกับจำนวน FAQ")
-
-    except Exception as error:
-        semantic_vectors = None
-        embedding_error = type(error).__name__
-
-    return (
-        chunks,
-        semantic_vectors,
-        vectorizer,
-        tfidf_vectors,
-        embedding_error,
-    )
-
-
-file_version = os.path.getmtime(file_path)
-(
-    chunks,
-    semantic_vectors,
-    vectorizer,
-    tfidf_vectors,
-    embedding_error,
-) = build_retriever(file_path, file_version)
-
-if embedding_error:
-    st.warning(
-        "ไม่สามารถสร้าง Semantic Embedding ได้ "
-        "ระบบจึงเปลี่ยนไปใช้การค้นหาแบบ TF-IDF ชั่วคราว "
-        f"({embedding_error})"
-    )
-
-
-def search_faq(question, top_k=5):
-    expanded_question = expand_query(question)
-    retrieval_method = "Semantic Embedding + synonym dictionary"
-
-    if semantic_vectors is not None:
-        try:
-            result = genai.embed_content(
-                model=EMBEDDING_MODEL,
-                content=expanded_question,
-                task_type="retrieval_query",
-            )
-            question_vector = result["embedding"]
-            scores = cosine_similarity(
-                [question_vector], semantic_vectors
-            ).flatten()
-        except Exception:
-            retrieval_method = "TF-IDF fallback + synonym dictionary"
-            question_vector = vectorizer.transform([expanded_question])
-            scores = cosine_similarity(
-                question_vector, tfidf_vectors
-            ).flatten()
-    else:
-        retrieval_method = "TF-IDF fallback + synonym dictionary"
-        question_vector = vectorizer.transform([expanded_question])
-        scores = cosine_similarity(
-            question_vector, tfidf_vectors
-        ).flatten()
-
-    result_count = min(top_k, len(chunks))
-    top_indexes = scores.argsort()[::-1][:result_count]
-    context = "\n\n---\n\n".join(chunks[index] for index in top_indexes)
-    matches = [
-        (int(index), float(scores[index]))
-        for index in top_indexes
-    ]
-
-    return context, matches, retrieval_method
-
-
+with st.sidebar:
+    with st.expander("ข้อมูลระบบสำหรับผู้ดูแล"):
+        if retriever["warning"]:
+            st.warning(retriever["warning"])
+        else:
+            st.caption("โหลด persisted embeddings ที่ตรงกับ FAQ แล้ว")
+        if not api_key:
+            st.warning("ไม่พบ GEMINI_API_KEY_INSURVERSE ใน .env หรือ Secrets/environment: ยังตอบ Direct FAQ ได้")
 
 for msg in st.session_state["messages"]:
-    display_role = "assistant" if msg["role"] == "model" else "user"
-    avatar = str(BOT_AVATAR_PATH) if msg["role"] == "model" else "👤"
-    st.chat_message(display_role, avatar=avatar).write(msg["content"])
+    if msg["role"] == "model":
+        st.chat_message("assistant", avatar=str(BOT_AVATAR_PATH)).write(msg["content"])
+    else:
+        st.chat_message("user").write(msg["content"])
 
 if prompt := st.chat_input("พิมพ์คำถามเกี่ยวกับภาควิชาที่นี่..."):
+    prompt = clean_question(prompt)
+    if not prompt:
+        st.warning("กรุณาพิมพ์คำถามก่อนส่งค่ะ")
+        st.stop()
+    started = time.perf_counter()
+    history = build_history(st.session_state["messages"])
     st.session_state["messages"].append({"role": "user", "content": prompt})
-    st.chat_message("user", avatar="👤").write(prompt)
-
-
-    def generate_response():
-        history = [
-            {"role": msg["role"], "parts": [{"text": msg["content"]}]}
-            for msg in st.session_state["messages"]
-        ]
-
-        if prompt.lower().startswith("add") or prompt.lower().endswith("add"):
-            answer = "ขอบคุณสำหรับคำแนะนำค่ะ"
-            st.chat_message("assistant", avatar=str(BOT_AVATAR_PATH)).write(answer)
-            st.session_state["messages"].append(
-                {"role": "model", "content": answer}
-            )
-
-        else:
-            try:
-                context, matches, retrieval_method = search_faq(prompt)
-            except Exception as error:
-                st.error(
-                    "ระบบค้นหาข้อมูลขัดข้อง กรุณาลองใหม่อีกครั้ง "
-                    f"({type(error).__name__})"
-                )
-                return
-
-          
-                for rank, (index, score) in enumerate(matches, start=1):
+    st.chat_message("user").write(prompt)
+    result = None
+    with st.chat_message("assistant", avatar=str(BOT_AVATAR_PATH)):
+        placeholder = st.empty()
+        grounded_answer = False
+        try:
+            result = retrieve(prompt, retriever, st.session_state, embed_content)
+            answer = result["answer"]
+            if answer is None:
+                if not api_key:
+                    answer = "ยังไม่สามารถเรียบเรียงคำตอบได้ กรุณาให้ผู้ดูแลตั้งค่า GEMINI_API_KEY_INSURVERSE หรือลองระบุคำถามให้ชัดเจนขึ้นค่ะ"
+                else:
+                    generation_started = time.perf_counter()
+                    try:
+                        chat = create_chat(client, history)
+                        answer, streaming = generate_answer(
+                            chat, build_rag_prompt(result["context"], prompt), placeholder.markdown)
+                        result["streaming"] = streaming
+                        grounded_answer = answer.strip() != NOT_FOUND
+                    finally:
+                        result["timings"]["Gemini generation (ms)"] = (time.perf_counter() - generation_started) * 1000
+            else:
+                grounded_answer = True
+            placeholder.markdown(answer)
+            if grounded_answer:
+                st.session_state[CONTEXT_STATE_KEY] = result["next_context"]
+        except Exception:
+            # Replace partial streams and never expose SDK errors or credentials.
+            LOGGER.exception("Answer generation failed")
+            answer = "ระบบยังไม่สามารถสร้างคำตอบได้ในขณะนี้ กรุณาลองใหม่อีกครั้งค่ะ"
+            placeholder.markdown(answer)
+        st.session_state["messages"].append({"role": "model", "content": answer})
+        if result:
+            result["timings"]["Total answer time (ms)"] = (time.perf_counter() - started) * 1000
+            with st.expander("ดูข้อมูล FAQ ที่ใช้และเวลาประมวลผล"):
+                st.caption(f"Route {result['route']} · {result['method']} (เริ่มเลือก Route {result['requested_route']})")
+                if result.get("used_context"):
+                    st.caption(
+                        f"ใช้บริบทหัวข้อ {result['next_context'].get('topic') or '-'} · "
+                        f"คำค้น: {result['search_question']}"
+                    )
+                if result.get("streaming") is False:
+                    st.caption("SDK ไม่รองรับ streaming จึงแสดงคำตอบเมื่อเสร็จ")
+                st.json(result["timings"])
+                for rank, (index, score) in enumerate(result["matches"], start=1):
                     st.markdown(f"**อันดับ {rank} · คะแนน {score:.3f}**")
-                    st.markdown(chunks[index])
+                    st.markdown(retriever["chunks"][index])
                     st.divider()
-
-            rag_prompt = f"""
-ตอบคำถามโดยอ้างอิงจากข้อมูล FAQ ด้านล่างเท่านั้น
-ให้พิจารณาจากความหมายของคำถาม ไม่จำเป็นต้องใช้คำตรงกับ FAQ ทุกคำ
-หากข้อมูลที่ค้นพบไม่เกี่ยวข้องกับคำถามจริง ๆ ให้ตอบว่า
-"ขออภัย ไม่พบข้อมูลนี้ในชุดข้อมูลหลักสูตร"
-
-ข้อมูล FAQ ที่ค้นพบ:
-{context}
-
-คำถามของผู้ใช้:
-{prompt}
-"""
-
-            # เอาคำถามล่าสุดออก เพราะจะส่งผ่าน rag_prompt
-            history = history[:-1]
-
-            try:
-                chat_session = model.start_chat(history=history)
-                response = chat_session.send_message(rag_prompt)
-            except Exception as error:
-                st.error(
-                    "ไม่สามารถติดต่อโมเดลเพื่อสร้างคำตอบได้ "
-                    f"({type(error).__name__})"
-                )
-                return
-
-            st.session_state["messages"].append(
-                {"role": "model", "content": response.text}
-            )
-            st.chat_message(
-                "assistant", avatar=str(BOT_AVATAR_PATH)
-            ).write(response.text)
-
-    generate_response()
-
-    
