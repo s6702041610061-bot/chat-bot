@@ -1,7 +1,7 @@
 {
-  "faq_sha256": "6eeb4ffdb687f5d5effe23a279448c0eb2bd10aebaa0408b63d067d5603257a2",
+  "faq_sha256": "1661dd922ae7dcb1c94769100aeb3c8014a0b565c38c9d522f765c8342f7dd77",
   "model": "models/gemini-embedding-001",
   "faq_count": 183,
   "format_version": 1,
-  "embeddings_sha256": "e1b8910d2ed0d666c7546886beb51a6f74c26ef0cd7b9b50b905f60600bf9d3f"
+  "embeddings_sha256": "bd333688d94ac3b3b9905777140391b2ef02c8c3670bfe8c1461dbddd552dedb"
 }

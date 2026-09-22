@@ -151,6 +151,10 @@ class RagTests(unittest.TestCase):
             vectors, warning = rag.load_persisted_embeddings(root, self.data, count)
             self.assertEqual(vectors.shape, (count, 3))
             self.assertIsNone(warning)
+            unix_newlines = self.data.replace(b'\r\n', b'\n').replace(b'\r', b'\n')
+            vectors, warning = rag.load_persisted_embeddings(root, unix_newlines, count)
+            self.assertEqual(vectors.shape, (count, 3))
+            self.assertIsNone(warning)
             self.assertIsNone(rag.load_persisted_embeddings(root, self.data + b'changed', count)[0])
             meta_path = root / 'faq_embeddings.meta.json'
             original = meta_path.read_text()

@@ -138,6 +138,12 @@ def parse_faq(content):
     return chunks
 
 
+def canonical_faq_bytes(faq_bytes):
+    """Make FAQ hashes independent of Windows, macOS, and Linux line endings."""
+    text = faq_bytes.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
+    return text.encode("utf-8")
+
+
 def extract_faq_answer(chunk):
     match = re.search(r"(?m)^\s*\*\*คำตอบ:\*\*\s*(.*)", chunk, re.DOTALL)
     if not match:
@@ -171,7 +177,8 @@ def faq_reference(chunk):
 
 
 def embedding_metadata(faq_bytes, count):
-    return {"faq_sha256": hashlib.sha256(faq_bytes).hexdigest(),
+    canonical = canonical_faq_bytes(faq_bytes)
+    return {"faq_sha256": hashlib.sha256(canonical).hexdigest(),
             "model": EMBEDDING_MODEL, "faq_count": count, "format_version": FORMAT_VERSION}
 
 
@@ -202,7 +209,8 @@ def load_persisted_embeddings(directory, faq_bytes, count):
 
 
 def build_retriever(faq_bytes, directory):
-    chunks = parse_faq(faq_bytes.decode("utf-8-sig"))
+    canonical = canonical_faq_bytes(faq_bytes)
+    chunks = parse_faq(canonical.decode("utf-8"))
     semantic, warning = load_persisted_embeddings(directory, faq_bytes, len(chunks))
     vectorizer = TfidfVectorizer(analyzer="char", ngram_range=(2, 6), sublinear_tf=True)
     vectors = vectorizer.fit_transform(chunks)

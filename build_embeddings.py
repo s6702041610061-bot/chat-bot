@@ -10,7 +10,7 @@ import time
 
 import numpy as np
 from rag import (EMBEDDING_BATCH_SIZE, EMBEDDING_MODEL, embedding_metadata,
-                 parse_faq, validate_vectors)
+                 canonical_faq_bytes, parse_faq, validate_vectors)
 
 APP_DIR = Path(__file__).resolve().parent
 EMBEDDING_ITEMS_PER_WINDOW = 80
@@ -40,8 +40,8 @@ def rate_limit_retry_delay(error):
 def build_embeddings(directory, embed_content, sleep_fn=time.sleep, progress=print,
                      pause_at_half=False):
     directory = Path(directory)
-    faq_bytes = (directory / "FAQ_Chatbot_100.md").read_bytes()
-    chunks = parse_faq(faq_bytes.decode("utf-8-sig"))
+    faq_bytes = canonical_faq_bytes((directory / "FAQ_Chatbot_100.md").read_bytes())
+    chunks = parse_faq(faq_bytes.decode("utf-8"))
     batches = []
     start = 0
     items_in_window = 0
@@ -101,7 +101,7 @@ def build_embeddings(directory, embed_content, sleep_fn=time.sleep, progress=pri
         items_in_window += len(batch)
         progress(f"Embedded {start}/{len(chunks)} FAQs")
     vectors = validate_vectors(np.vstack(batches), len(chunks))
-    if (directory / "FAQ_Chatbot_100.md").read_bytes() != faq_bytes:
+    if canonical_faq_bytes((directory / "FAQ_Chatbot_100.md").read_bytes()) != faq_bytes:
         raise ValueError("FAQ changed during generation; run again")
     metadata = embedding_metadata(faq_bytes, len(chunks))
     # Stage both files; metadata last. Interrupted writes fail checksum validation.
