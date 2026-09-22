@@ -643,7 +643,7 @@ def clear_history():
     st.session_state["messages"] = [
         {
             "role": "model",
-            "content": "สวัสดีค่ะ มีอะไรเกี่ยวกับคณะครุศาสตร์อุตสาหกรรมหรือภาควิชาเทคโนโลยีวิศวกรรมไฟฟ้าให้ช่วยค้นหาได้บ้างคะ",
+            "content": "สวัสดีค่ะ สอบถามเรื่องหลักสูตร การสมัครเรียน ค่าใช้จ่าย หรือการติดต่อภาควิชาครุศาสตร์ไฟฟ้า คณะครุศาสตร์อุตสาหกรรม มจพ. ได้เลยค่ะ หากระบุหลักสูตรและปีที่สนใจ จะช่วยค้นหาข้อมูลได้ตรงขึ้นค่ะ",
         }
     ]
     st.session_state.pop(CONTEXT_STATE_KEY, None)
@@ -666,7 +666,7 @@ with st.sidebar:
     )
     if st.button("＋ แชตใหม่", use_container_width=True):
         clear_history()
-    st.caption("ผู้ช่วยค้นหาข้อมูลจาก FAQ ของภาควิชาเทคโนโลยีวิศวกรรมไฟฟ้า")
+    st.caption("ผู้ช่วยข้อมูลภาควิชาครุศาสตร์ไฟฟ้า คณะครุศาสตร์อุตสาหกรรม มจพ.")
 
 st.markdown(
     f"""
@@ -688,7 +688,7 @@ if "messages" not in st.session_state:
     st.session_state["messages"] = [
         {
             "role": "model",
-            "content": "สวัสดีค่ะ มีอะไรเกี่ยวกับคณะครุศาสตร์อุตสาหกรรมหรือภาควิชาเทคโนโลยีวิศวกรรมไฟฟ้าให้ช่วยค้นหาได้บ้างคะ",
+            "content": "สวัสดีค่ะ สอบถามเรื่องหลักสูตร การสมัครเรียน ค่าใช้จ่าย หรือการติดต่อภาควิชาครุศาสตร์ไฟฟ้า คณะครุศาสตร์อุตสาหกรรม มจพ. ได้เลยค่ะ หากระบุหลักสูตรและปีที่สนใจ จะช่วยค้นหาข้อมูลได้ตรงขึ้นค่ะ",
         }
     ]
 
@@ -696,7 +696,7 @@ file_path = APP_DIR / "FAQ_Chatbot_100.md"
 
 
 @st.cache_resource
-def cached_retriever(faq_bytes, embedding_version):
+def cached_retriever(faq_bytes, embedding_version, vocabulary_version):
     return build_retriever(faq_bytes, APP_DIR)
 
 
@@ -705,7 +705,9 @@ try:
         (path.stat().st_mtime_ns, path.stat().st_size) if path.exists() else None
         for path in (APP_DIR / "faq_embeddings.npz", APP_DIR / "faq_embeddings.meta.json")
     )
-    retriever = cached_retriever(file_path.read_bytes(), embedding_version)
+    retriever = cached_retriever(file_path.read_bytes(), embedding_version,
+                                 ((APP_DIR / "synonyms.json").read_bytes(),
+                                  (APP_DIR / "question_aliases.json").read_bytes()))
 except (OSError, ValueError, UnicodeError):
     st.error("ไม่สามารถอ่านชุดข้อมูล FAQ ได้ กรุณาตรวจสอบไฟล์ FAQ_Chatbot_100.md")
     st.stop()

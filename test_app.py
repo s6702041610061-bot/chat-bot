@@ -57,7 +57,7 @@ class AppTests(unittest.TestCase):
         self.assertFalse(app.exception)
         answer = app.session_state['messages'][-1]['content']
         self.assertIn('20 คน', answer)
-        self.assertIn('FAQ 111', answer)
+        self.assertIn('FAQ 177', answer)
         self.chat.send_message_stream.assert_not_called()
         self.embed_mock.assert_not_called()
 

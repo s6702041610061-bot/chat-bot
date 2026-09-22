@@ -35,6 +35,13 @@ class RagTests(unittest.TestCase):
         self.assertIsNone(rag.extract_faq_answer('unknown'))
         self.assertTrue(all(rag.extract_faq_answer(c) for c in self.retriever['chunks']))
 
+    def test_faq_parser_rejects_duplicate_or_incomplete_records(self):
+        with self.assertRaisesRegex(ValueError, 'FAQ 001'):
+            rag.parse_faq('## FAQ 001\n**คำถาม:** Q\n**คำตอบ:** A\n\n'
+                          '## FAQ 001\n**คำถาม:** Q2\n**คำตอบ:** A2')
+        with self.assertRaisesRegex(ValueError, 'ไม่มีคำตอบ'):
+            rag.parse_faq('## FAQ 001\n**คำถาม:** Q')
+
     def test_local_retrieval(self):
         for question in ('ครูประจำภาควิชามีกี่คน', 'ค่าเล่าเรียนเท่าไหร่', 'ปีหนึ่งเรียนอะไร'):
             scores, indexes = rag.search_tfidf(question, self.retriever)
@@ -43,11 +50,11 @@ class RagTests(unittest.TestCase):
             self.assertTrue(np.isfinite(scores).all())
 
     def test_high_confidence_teacher_count_is_answered_directly(self):
-        result = rag.retrieve('ภาคนี้มีอาจารย์กี่คน', self.retriever, {}, None)
+        result = rag.retrieve('ภาควิชามีคณาจารย์ประจำกี่คน?', self.retriever, {}, None)
         self.assertEqual(result['route'], 'A')
         self.assertIn('20 คน', result['answer'])
-        self.assertIn('FAQ 111', result['answer'])
-        self.assertEqual(result['matches'][0][0], 110)
+        self.assertIn('FAQ 124', result['answer'])
+        self.assertEqual(result['matches'][0][0], 123)
 
     def test_contextual_follow_up_reuses_last_topic_and_faqs(self):
         state = {
@@ -76,11 +83,12 @@ class RagTests(unittest.TestCase):
             semantic=np.ones((len(self.retriever['chunks']), 3)),
         )
         embed = Mock(return_value={'embedding': [1., 1., 1.]})
-        result = rag.retrieve('อะไรบ้าง', retriever, state, embed)
+        with patch('rag.choose_route', return_value='C'):
+            result = rag.retrieve('แล้วต้องเลือกตอนไหน', retriever, state, embed)
         self.assertTrue(result['used_context'])
         embed.assert_called_once()
         self.assertIn('แขนงวิชา', embed.call_args.kwargs['content'])
-        self.assertIn('อะไรบ้าง', embed.call_args.kwargs['content'])
+        self.assertIn('แล้วต้องเลือกตอนไหน', embed.call_args.kwargs['content'])
 
     def test_clear_new_topic_does_not_reuse_last_context(self):
         state = {
@@ -129,7 +137,9 @@ class RagTests(unittest.TestCase):
             sleep = Mock()
             count = build_embeddings(root, embed, sleep_fn=sleep, progress=Mock())
             self.assertEqual(embed.call_count, (count + 19) // 20)
-            sleep.assert_called_once_with(EMBEDDING_WINDOW_DELAY_SECONDS)
+            self.assertEqual(sleep.call_count, (count - 1) // 80)
+            self.assertTrue(all(call.args == (EMBEDDING_WINDOW_DELAY_SECONDS,)
+                                for call in sleep.call_args_list))
             vectors, warning = rag.load_persisted_embeddings(root, self.data, count)
             self.assertEqual(vectors.shape, (count, 3))
             self.assertIsNone(warning)

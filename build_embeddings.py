@@ -37,15 +37,25 @@ def rate_limit_retry_delay(error):
     return max(EMBEDDING_WINDOW_DELAY_SECONDS, requested_delay)
 
 
-def build_embeddings(directory, embed_content, sleep_fn=time.sleep, progress=print):
+def build_embeddings(directory, embed_content, sleep_fn=time.sleep, progress=print,
+                     pause_at_half=False):
     directory = Path(directory)
     faq_bytes = (directory / "FAQ_Chatbot_100.md").read_bytes()
     chunks = parse_faq(faq_bytes.decode("utf-8-sig"))
     batches = []
     start = 0
     items_in_window = 0
+    halfway = math.ceil(len(chunks) / 2) if pause_at_half else None
 
     while start < len(chunks):
+        if halfway is not None and start == halfway:
+            progress(
+                f"Embedded first half ({start}/{len(chunks)} FAQs); waiting "
+                f"{EMBEDDING_WINDOW_DELAY_SECONDS} seconds before second half..."
+            )
+            sleep_fn(EMBEDDING_WINDOW_DELAY_SECONDS)
+            items_in_window = 0
+            halfway = None
         if items_in_window >= EMBEDDING_ITEMS_PER_WINDOW:
             progress(
                 f"Embedded {start}/{len(chunks)} FAQs; waiting "
@@ -56,7 +66,8 @@ def build_embeddings(directory, embed_content, sleep_fn=time.sleep, progress=pri
 
         remaining_in_window = EMBEDDING_ITEMS_PER_WINDOW - items_in_window
         batch_size = min(EMBEDDING_BATCH_SIZE, remaining_in_window,
-                         len(chunks) - start)
+                         len(chunks) - start,
+                         halfway - start if halfway is not None else len(chunks) - start)
         batch = chunks[start:start + batch_size]
 
         retries = 0
@@ -116,7 +127,7 @@ def main():
         return 1
     client = create_client(api_key)
     try:
-        count = build_embeddings(APP_DIR, embedding_function(client))
+        count = build_embeddings(APP_DIR, embedding_function(client), pause_at_half=True)
     except Exception as error:
         print(f"Embedding build failed: {error}")
         return 1
