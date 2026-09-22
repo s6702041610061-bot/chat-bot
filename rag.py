@@ -146,6 +146,25 @@ def extract_faq_answer(chunk):
     return answer or None
 
 
+def fallback_faq_answer(result, retriever):
+    """Use one clear local FAQ when answer generation is temporarily unavailable."""
+    if not result or result.get("route") != "B" or result.get("used_context"):
+        return None
+    matches = result.get("matches") or []
+    if not matches:
+        return None
+    top_index, top_score = matches[0]
+    runner_up = matches[1][1] if len(matches) > 1 else 0.0
+    if (top_score < LOCAL_GENERATE_THRESHOLD
+            or top_score - runner_up < LOCAL_GENERATE_MARGIN):
+        return None
+    chunks = retriever["chunks"]
+    if not isinstance(top_index, (int, np.integer)) or not 0 <= top_index < len(chunks):
+        return None
+    answer = extract_faq_answer(chunks[top_index])
+    return f"{answer}\n\nอ้างอิง: {faq_reference(chunks[top_index])}" if answer else None
+
+
 def faq_reference(chunk):
     match = re.match(r"## FAQ (\d+)", chunk)
     return f"FAQ {match.group(1)}" if match else "FAQ"

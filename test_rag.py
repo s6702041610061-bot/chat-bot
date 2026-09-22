@@ -35,6 +35,14 @@ class RagTests(unittest.TestCase):
         self.assertIsNone(rag.extract_faq_answer('unknown'))
         self.assertTrue(all(rag.extract_faq_answer(c) for c in self.retriever['chunks']))
 
+    def test_generation_fallback_requires_clear_local_match(self):
+        result = rag.retrieve('เปิดรับสมัครเมื่อไหร่', self.retriever, {}, None)
+        answer = rag.fallback_faq_answer(result, self.retriever)
+        self.assertIn('FAQ 181', answer)
+        self.assertIn('Admission KMUTNB', answer)
+        uncertain = dict(result, matches=[(result['matches'][0][0], .3), (result['matches'][1][0], .29)])
+        self.assertIsNone(rag.fallback_faq_answer(uncertain, self.retriever))
+
     def test_faq_parser_rejects_duplicate_or_incomplete_records(self):
         with self.assertRaisesRegex(ValueError, 'FAQ 001'):
             rag.parse_faq('## FAQ 001\n**คำถาม:** Q\n**คำตอบ:** A\n\n'

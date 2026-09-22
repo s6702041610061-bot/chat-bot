@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 import time
 from gemini_service import create_chat, create_client, embedding_function
 from rag import (build_retriever, retrieve, build_history, build_rag_prompt,
-                 generate_answer, NOT_FOUND, expand_query, SYNONYM_GROUPS,
+                 generate_answer, fallback_faq_answer, NOT_FOUND, expand_query, SYNONYM_GROUPS,
                  CONTEXT_STATE_KEY, clean_question)
 
 LOGGER = logging.getLogger(__name__)
@@ -764,7 +764,11 @@ if prompt := st.chat_input("พิมพ์คำถามเกี่ยวก�
         except Exception:
             # Replace partial streams and never expose SDK errors or credentials.
             LOGGER.exception("Answer generation failed")
-            answer = "ระบบยังไม่สามารถสร้างคำตอบได้ในขณะนี้ กรุณาลองใหม่อีกครั้งค่ะ"
+            answer = fallback_faq_answer(result, retriever)
+            if answer:
+                st.session_state[CONTEXT_STATE_KEY] = result["next_context"]
+            else:
+                answer = "ระบบยังไม่สามารถสร้างคำตอบได้ในขณะนี้ กรุณาลองใหม่อีกครั้งค่ะ"
             placeholder.markdown(answer)
         st.session_state["messages"].append({"role": "model", "content": answer})
         if result:

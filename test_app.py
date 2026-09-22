@@ -107,6 +107,7 @@ class AppTests(unittest.TestCase):
         self.assertFalse(app.exception)
         self.assertNotIn('partial', app.session_state['messages'][-1]['content'])
         self.assertNotIn('▌', app.session_state['messages'][-1]['content'])
+        self.assertIn('อ้างอิง: FAQ', app.session_state['messages'][-1]['content'])
 
     def test_no_key_still_direct(self):
         with patch.dict('os.environ', {'GEMINI_API_KEY_INSURVERSE': ''}), patch('streamlit.secrets', {}):
